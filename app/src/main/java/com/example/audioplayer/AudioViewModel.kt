@@ -2,15 +2,26 @@ package com.example.audioplayer
 
 import android.app.Application
 import android.media.MediaPlayer
-import android.os.Handler
-import android.os.Looper
-import androidx.compose.runtime.*
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.audioplayer.data.AudioFolder
+import com.example.audioplayer.data.Song
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class AudioViewModel(application: Application) : AndroidViewModel(application) {
     private val context = application.applicationContext
     private var mediaPlayer: MediaPlayer? = null
 
+    // --- State Properties ---
+
+    // UI State: Tracks the currently selected folder. If null, show the folder list.
+    private val _selectedFolder = mutableStateOf<AudioFolder?>(null)
+    val selectedFolder: State<AudioFolder?> = _selectedFolder
+
+    // Player State
     private val _isPlaying = mutableStateOf(false)
     val isPlaying: State<Boolean> = _isPlaying
 
@@ -20,95 +31,131 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentTitle = mutableStateOf("")
     val currentTitle: State<String> = _currentTitle
 
-    // New properties
+    // Tracks the index of the song *within the selected folder*
     private val _currentSongIndex = mutableStateOf(0)
-    val currentSongIndex: State<Int> = _currentSongIndex
 
-    private var songs: List<Pair<String, Int>> = emptyList()
-
-    private val handler = Handler(Looper.getMainLooper())
-    private val updateProgress = object : Runnable {
-        override fun run() {
-            mediaPlayer?.let {
-                if (it.isPlaying) {
-                    _progress.value = it.currentPosition.toFloat() / it.duration
-                    handler.postDelayed(this, 500)
-                }
-            }
-        }
-    }
+    // --- Data ---
+    val folders: List<AudioFolder>
 
     init {
-        // Initialize the list of songs here instead of in the AudioPlayerScreen
-        songs = listOf(
-            "a1" to R.raw.a1,
-            "a2" to R.raw.a2,
-            "a3" to R.raw.a3,
-            "a4" to R.raw.a4
+        // Define the folder structure here.
+        // Make sure you have added b1.amr, b2.amr, etc. to your res/raw folder!
+        folders = listOf(
+            AudioFolder(
+                name = "Folder 1",
+                songs = listOf(
+                    Song(title = "a1", resId = R.raw.a1),
+                    Song(title = "a2", resId = R.raw.a2),
+                    Song(title = "a3", resId = R.raw.a3),
+                    Song(title = "a4", resId = R.raw.a4)
+                )
+            ),
+            AudioFolder(
+                name = "Folder 2",
+                songs = listOf(
+                    Song(title = "b1", resId = R.raw.b1),
+                    Song(title = "b2", resId = R.raw.b2),
+                    Song(title = "b3", resId = R.raw.b3),
+                    Song(title = "b4", resId = R.raw.b4)
+                )
+            )
         )
     }
 
-    fun play(index: Int) {
-        if (index < 0 || index >= songs.size) return //Prevent index out of bound exception
-        val (title, resId) = songs[index]
-        mediaPlayer?.release()
-        mediaPlayer = MediaPlayer.create(context, resId).apply {
-            start()
-            setOnCompletionListener {
-                playNext() // Play next song when current finishes
+    // --- Public Functions for UI Interaction ---
+
+    fun selectFolder(folder: AudioFolder) {
+        _selectedFolder.value = folder
+    }
+
+    fun goBackToFolders() {
+        _selectedFolder.value = null
+        stopAndReleasePlayer()
+    }
+
+    fun play(songIndex: Int) {
+        _selectedFolder.value?.let { folder ->
+            if (songIndex < 0 || songIndex >= folder.songs.size) return
+
+            val song = folder.songs[songIndex]
+            mediaPlayer?.release()
+
+            try {
+                mediaPlayer = MediaPlayer.create(context, song.resId).apply {
+                    start()
+                    setOnCompletionListener { playNext() }
+                }
+
+                _isPlaying.value = true
+                _currentTitle.value = song.title
+                _currentSongIndex.value = songIndex
+                startProgressUpdater()
+            } catch (e: Exception) {
+                _isPlaying.value = false
+                e.printStackTrace()
             }
         }
-        _isPlaying.value = true
-        _currentTitle.value = title
-        _currentSongIndex.value = index
-        handler.post(updateProgress)
     }
-
-    fun play(resId: Int, title: String) { //Kept play() so you don't have to change code elsewhere.
-        val index = songs.indexOfFirst { it.second == resId }
-        if (index != -1) {
-            play(index)
-        } else {
-            //Handle if the resource id is not found in the song list.
-        }
-
-    }
-
 
     fun togglePlayPause() {
         mediaPlayer?.let {
             if (it.isPlaying) {
                 it.pause()
                 _isPlaying.value = false
-                handler.removeCallbacks(updateProgress)
             } else {
                 it.start()
                 _isPlaying.value = true
-                handler.post(updateProgress)
+                startProgressUpdater()
             }
         }
     }
 
-    fun seekTo(position: Float) {
+    fun seekTo(newProgress: Float) {
         mediaPlayer?.let {
-            val newPosition = (it.duration * position).toInt()
+            val newPosition = (it.duration * newProgress).toInt()
             it.seekTo(newPosition)
         }
     }
 
     fun playNext() {
-        val nextIndex = (_currentSongIndex.value + 1) % songs.size
-        play(nextIndex)
+        _selectedFolder.value?.let { folder ->
+            val nextIndex = (_currentSongIndex.value + 1) % folder.songs.size
+            play(nextIndex)
+        }
     }
 
     fun playPrevious() {
-        val previousIndex = (_currentSongIndex.value - 1 + songs.size) % songs.size
-        play(previousIndex)
+        _selectedFolder.value?.let { folder ->
+            val previousIndex = (_currentSongIndex.value - 1 + folder.songs.size) % folder.songs.size
+            play(previousIndex)
+        }
+    }
+
+    // --- Private Helper Functions ---
+
+    private fun startProgressUpdater() {
+        viewModelScope.launch {
+            while (_isPlaying.value) {
+                mediaPlayer?.let {
+                    if (it.duration > 0) {
+                        _progress.value = it.currentPosition.toFloat() / it.duration
+                    }
+                }
+                delay(500)
+            }
+        }
+    }
+
+    private fun stopAndReleasePlayer() {
+        _isPlaying.value = false
+        mediaPlayer?.release()
+        mediaPlayer = null
+        _currentTitle.value = ""
+        _progress.value = 0f
     }
 
     override fun onCleared() {
-        mediaPlayer?.release()
-        handler.removeCallbacks(updateProgress)
+        stopAndReleasePlayer()
         super.onCleared()
     }
 }
