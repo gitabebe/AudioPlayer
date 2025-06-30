@@ -6,8 +6,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -16,23 +16,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.audioplayer.data.AudioFolder
+import com.example.audioplayer.data.MainCategory
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AudioPlayerScreen(viewModel: AudioViewModel) {
+    val selectedCategory by viewModel.selectedCategory
     val selectedFolder by viewModel.selectedFolder
 
-    // The content of the screen changes based on whether a folder is selected
+    // Determine the current title and back navigation action based on the navigation depth
+    val (title, onBackPressed) = when {
+        selectedFolder != null -> selectedFolder!!.name to { viewModel.goBackToFolders() }
+        selectedCategory != null -> selectedCategory!!.name to { viewModel.goBackToCategories() }
+        else -> "Audio Player" to null
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Text(if (selectedFolder == null) "Music Folders" else selectedFolder!!.name)
-                },
+                title = { Text(title) },
                 navigationIcon = {
-                    if (selectedFolder != null) {
-                        IconButton(onClick = { viewModel.goBackToFolders() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to folders")
+                    // Show back button if onBackPressed is not null
+                    onBackPressed?.let {
+                        IconButton(onClick = it) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                         }
                     }
                 }
@@ -40,15 +47,60 @@ fun AudioPlayerScreen(viewModel: AudioViewModel) {
         }
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
-            when (val folder = selectedFolder) {
-                null -> FolderList(
-                    folders = viewModel.folders,
-                    onFolderClick = { viewModel.selectFolder(it) }
-                )
-                else -> PlayerView(
-                    viewModel = viewModel,
-                    folder = folder
-                )
+            // Conditionally display the correct screen based on selection state
+            when {
+                selectedFolder != null -> {
+                    // Level 3: Player View for the selected folder
+                    PlayerView(
+                        viewModel = viewModel,
+                        folder = selectedFolder!!
+                    )
+                }
+                selectedCategory != null -> {
+                    // Level 2: Folder List for the selected category
+                    FolderList(
+                        folders = selectedCategory!!.folders,
+                        onFolderClick = { viewModel.selectFolder(it) }
+                    )
+                }
+                else -> {
+                    // Level 1: Top-level Category List
+                    CategoryList(
+                        categories = viewModel.categories,
+                        onCategoryClick = { viewModel.selectCategory(it) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryList(
+    categories: List<MainCategory>,
+    onCategoryClick: (MainCategory) -> Unit
+) {
+    LazyColumn(contentPadding = PaddingValues(16.dp)) {
+        items(categories) { category ->
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .clickable { onCategoryClick(category) },
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FolderSpecial, // Using a different icon for categories
+                        contentDescription = "Category Icon",
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(text = category.name, style = MaterialTheme.typography.titleLarge)
+                }
             }
         }
     }
@@ -105,6 +157,7 @@ private fun PlayerView(viewModel: AudioViewModel, folder: AudioFolder) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
+                    // Highlight the currently playing song
                     colors = if (title == song.title) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else ButtonDefaults.buttonColors()
                 ) {
                     Text(song.title)

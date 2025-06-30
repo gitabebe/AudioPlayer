@@ -11,3 +11,9 @@ data class AudioFolder(
     val name: String,
     val songs: List<Song>
 )
+
+// Represents a top-level category containing a list of audio folders
+data class MainCategory(
+    val name: String,
+    val folders: List<AudioFolder>
+)

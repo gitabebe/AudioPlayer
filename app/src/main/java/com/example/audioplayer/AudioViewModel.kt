@@ -3,19 +3,27 @@ package com.example.audioplayer
 import android.app.Application
 import android.media.MediaPlayer
 import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.audioplayer.data.AudioFolder
+import com.example.audioplayer.data.MainCategory
 import com.example.audioplayer.data.Song
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.lang.IllegalStateException
 
 class AudioViewModel(application: Application) : AndroidViewModel(application) {
-    private val context = application.applicationContext
+
     private var mediaPlayer: MediaPlayer? = null
 
     // --- State Properties ---
+
+    // UI State: Tracks the currently selected top-level category.
+    private val _selectedCategory = mutableStateOf<MainCategory?>(null)
+    val selectedCategory: State<MainCategory?> = _selectedCategory
 
     // UI State: Tracks the currently selected folder. If null, show the folder list.
     private val _selectedFolder = mutableStateOf<AudioFolder?>(null)
@@ -25,22 +33,22 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
     private val _isPlaying = mutableStateOf(false)
     val isPlaying: State<Boolean> = _isPlaying
 
-    private val _progress = mutableStateOf(0f)
+    private val _progress = mutableFloatStateOf(0f)
     val progress: State<Float> = _progress
 
     private val _currentTitle = mutableStateOf("")
     val currentTitle: State<String> = _currentTitle
 
     // Tracks the index of the song *within the selected folder*
-    private val _currentSongIndex = mutableStateOf(0)
+    private val _currentSongIndex = mutableIntStateOf(0)
 
     // --- Data ---
-    val folders: List<AudioFolder>
+    val categories: List<MainCategory>
 
     init {
-        // Define the folder structure here.
-        // Make sure you have added b1.amr, b2.amr, etc. to your res/raw folder!
-        folders = listOf(
+        // Define the entire data structure here.
+        // Make sure you have added the new audio files to your res/raw folder!
+        val meseretawiFolders = listOf(
             AudioFolder(
                 name = "ጸሎት ዘዘወትር",
                 songs = listOf(
@@ -88,8 +96,6 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
                     Song(title = "አንቲ እሙ ለብርሃን", resId = R.raw.bb13),
                     Song(title = "አይ ልሳን", resId = R.raw.bb14),
                     Song(title = "ተፈሥሒ ኦ ማርያም", resId = R.raw.bb15)
-
-
                 )
             ),
             AudioFolder(
@@ -179,15 +185,46 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
                 name = "ይወድስዋ መላእክት",
                 songs = listOf(
                     Song(title = "ይወድስዋ መላእክት", resId = R.raw.d01),
-                    Song(title = "ወበሳድስ ወርህ", resId = R.raw.d02),
+                    Song(title = "ወበሳድስ ወрህ", resId = R.raw.d02),
                     Song(title = "ይቤላ መልአክ", resId = R.raw.d03)
                 )
             )
+        )
 
+        val mezmurFolders = listOf(
+            AudioFolder(
+                name = "Segno",
+                songs = listOf(
+                    Song(title = "e01", resId = R.raw.e01),
+                    Song(title = "e02", resId = R.raw.e02)
+                )
+            ),
+            AudioFolder(
+                name = "Maksegno",
+                songs = listOf(
+                    Song(title = "f01", resId = R.raw.f01),
+                    Song(title = "f02", resId = R.raw.f02)
+                )
+            )
+        )
+
+        categories = listOf(
+            MainCategory(name = "Meseretawi", folders = meseretawiFolders),
+            MainCategory(name = "Mezmur", folders = mezmurFolders)
         )
     }
 
     // --- Public Functions for UI Interaction ---
+
+    fun selectCategory(category: MainCategory) {
+        _selectedCategory.value = category
+    }
+
+    fun goBackToCategories() {
+        _selectedCategory.value = null
+        _selectedFolder.value = null // Also clear folder selection
+        stopAndReleasePlayer()
+    }
 
     fun selectFolder(folder: AudioFolder) {
         _selectedFolder.value = folder
@@ -206,16 +243,17 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
             mediaPlayer?.release()
 
             try {
-                mediaPlayer = MediaPlayer.create(context, song.resId).apply {
+                mediaPlayer = MediaPlayer.create(getApplication(), song.resId).apply {
                     start()
                     setOnCompletionListener { playNext() }
                 }
 
                 _isPlaying.value = true
                 _currentTitle.value = song.title
-                _currentSongIndex.value = songIndex
+                _currentSongIndex.intValue = songIndex
                 startProgressUpdater()
             } catch (e: Exception) {
+                // Could not create media player, maybe file is missing?
                 _isPlaying.value = false
                 e.printStackTrace()
             }
@@ -237,21 +275,28 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
 
     fun seekTo(newProgress: Float) {
         mediaPlayer?.let {
-            val newPosition = (it.duration * newProgress).toInt()
-            it.seekTo(newPosition)
+            try {
+                if(it.isPlaying){
+                    val newPosition = (it.duration * newProgress).toInt()
+                    it.seekTo(newPosition)
+                }
+            } catch (e: IllegalStateException){
+                // player might not be in a valid state to seek
+                e.printStackTrace()
+            }
         }
     }
 
     fun playNext() {
         _selectedFolder.value?.let { folder ->
-            val nextIndex = (_currentSongIndex.value + 1) % folder.songs.size
+            val nextIndex = (_currentSongIndex.intValue + 1) % folder.songs.size
             play(nextIndex)
         }
     }
 
     fun playPrevious() {
         _selectedFolder.value?.let { folder ->
-            val previousIndex = (_currentSongIndex.value - 1 + folder.songs.size) % folder.songs.size
+            val previousIndex = (_currentSongIndex.intValue - 1 + folder.songs.size) % folder.songs.size
             play(previousIndex)
         }
     }
@@ -262,8 +307,12 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             while (_isPlaying.value) {
                 mediaPlayer?.let {
-                    if (it.duration > 0) {
-                        _progress.value = it.currentPosition.toFloat() / it.duration
+                    try {
+                        if (it.isPlaying && it.duration > 0) {
+                            _progress.floatValue = it.currentPosition.toFloat() / it.duration
+                        }
+                    } catch (e: IllegalStateException) {
+                        _progress.floatValue = 0f
                     }
                 }
                 delay(500)
@@ -276,7 +325,7 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
         mediaPlayer?.release()
         mediaPlayer = null
         _currentTitle.value = ""
-        _progress.value = 0f
+        _progress.floatValue = 0f
     }
 
     override fun onCleared() {
